@@ -366,6 +366,43 @@ class FinancialIntegrationTest(unittest.TestCase):
         self.assertAlmostEqual(engine.metrics["total_return"], 0.32)
         self.assertAlmostEqual(engine.metrics["turnover"], 3.0)
 
+    def test_precomputed_scores_match_both_price_modes_and_own_their_input(self):
+        path = self.root / "MarketData" / "2018" / "01" / "201801.parquet"
+        market = pd.read_parquet(path)
+        for price in ("open", "high", "low", "close"):
+            market["raw_" + price] = market[price] / 2
+        market["upper_limit"] = market.raw_open * 1.1
+        market["lower_limit"] = market.raw_open * .9
+        market.to_parquet(path, index=False)
+        for mode in ("adjusted_return", "raw_price"):
+            baseline = self.engine(price_mode=mode, initial_cash=10000., lookback=4, friendly_output=False)
+            metrics = baseline.run()
+            scores = baseline.tables["predictions"][["date", "code", "score"]].copy()
+            frozen = self.engine(inference=None, precomputed_scores=scores, price_mode=mode,
+                                 initial_cash=10000., lookback=4, friendly_output=False)
+            scores["score"] = 999.
+            self.assertEqual(metrics, frozen.run())
+            self.assertEqual(baseline.account, frozen.account)
+            for name in baseline.tables:
+                pd.testing.assert_frame_equal(baseline.tables[name], frozen.tables[name], check_exact=True)
+            self.assertEqual(frozen.performance["data"]["as_of_seconds"], 0.)
+            self.assertEqual(frozen.performance["score_source"], "precomputed")
+            self.assertEqual(metrics, frozen.run())
+
+    def test_precomputed_scores_reject_bad_coverage_finiteness_and_dates(self):
+        baseline = self.engine(friendly_output=False)
+        baseline.run()
+        scores = baseline.tables["predictions"][["date", "code", "score"]]
+        cases = [(scores.iloc[1:].copy(), "legal universe"),
+                 (scores.loc[scores.date.ne("2018-01-02")].copy(), "missing signal date"),
+                 (scores.assign(score=float("inf")), "finite numeric"),
+                 (pd.concat([scores, scores.iloc[[0]]]), "legal universe")]
+        for invalid, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                self.engine(inference=None, precomputed_scores=invalid, friendly_output=False).run()
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            self.engine(precomputed_scores=scores)
+
     def test_native_index_reaches_metrics_audit_files_and_friendly_output(self):
         path = self.root / "HS300_index" / "benchmark.csv"
         pd.DataFrame({"日期": self.dates[:4], "代码": ["SH000300"] * 4,

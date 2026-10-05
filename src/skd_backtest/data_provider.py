@@ -76,7 +76,7 @@ def _price_history(market, dates, previous, close_column="close"):
 
 
 class DataProvider:
-    def __init__(self, config: BacktestConfig, *, load_research: bool = True):
+    def __init__(self, config: BacktestConfig, *, load_research: bool = True, load_portfolio: bool = False):
         self.config = config
         self.load_research = load_research
         self._adjusted_limits = (AdjustedLimitProvider(config.data_dir)
@@ -84,6 +84,8 @@ class DataProvider:
         self._datasets = dict(SOURCE_COLUMNS) if load_research else {
             "MarketData": ("日期", "代码", "open", "close", "is_suspend"),
         }
+        if load_portfolio and not load_research:
+            self._datasets["Barra_factor"] = SOURCE_COLUMNS["Barra_factor"]
         market_columns = list(self._datasets["MarketData"])
         if config.price_mode == "raw_price":
             market_columns.extend(("raw_open", "raw_high", "raw_low", "raw_close"))
@@ -289,6 +291,8 @@ class DataProvider:
         if "Barra_factor" in tables:
             membership = tables["Barra_factor"][["日期", "代码"]]
             for name in ("Factor33_winsor", "MarketData"):
+                if name not in tables:
+                    continue
                 tables[name] = tables[name].merge(membership, on=["日期", "代码"], how="inner", sort=False)
         tables = {
             name: table.sort_values(["日期", "代码"], ignore_index=True)
@@ -414,7 +418,7 @@ class DataProvider:
                           and execution_date is not None)
                 yield DailyData(
                     date=date, open_market=self.open_market(date), close_market=self.close_market(date),
-                    research=self.as_of(date) if signal else None,
+                    research=self.as_of(date) if signal and self.load_research else None,
                     portfolio=self.portfolio_inputs(date) if signal else None,
                     execution_date=execution_date,
                 )

@@ -48,6 +48,9 @@ Barra 所需的 SciPy 随包默认安装；运行该示例即可使用已有风�
 指数数据是回测必需输入，缺少目录、日期或有效收益时直接报错；无需额外配置。
 
 `BacktestEngine` 也支持传入 `submission_dir`，由平台加载标准提交并管理每次评测的模型实例。
+已完成预测回放时，可传入 `precomputed_scores`（含 `date/code/score` 的 DataFrame）复用冻结分数。
+它与 `inference/submission_dir` 互斥，沿原信号日校验股票池和分数；只读取执行行情和当日Barra，
+保留原交易、费用、账户、标签、指标和七张审计表。此路径的性能验收针对本地源码，尚未发布新发行包。
 完整配置、参考数据与可复现性约定见[使用说明](docs/usage.md)。
 
 ## 文档

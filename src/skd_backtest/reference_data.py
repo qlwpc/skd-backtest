@@ -78,14 +78,14 @@ class ReferenceDataProvider:
         if "code" in required:
             codes = frame["code"]
             if codes.isna().any() or not all(
-                isinstance(value, str) and value for value in codes
+                isinstance(value, str) and value for value in codes.drop_duplicates()
             ):
                 raise ValueError(f"{name} codes must be nonempty strings")
 
         if name == "industries":
             values = frame["industry"]
             if values.isna().any() or not all(
-                isinstance(value, str) and value for value in values
+                isinstance(value, str) and value for value in values.drop_duplicates()
             ):
                 raise ValueError("industries must contain nonempty strings")
             return
@@ -219,7 +219,10 @@ def _read_source(path: Path, name: str) -> pd.DataFrame:
             values = frame[column].astype("string")
             if values.isna().any() or not values.str.fullmatch(r"[0-9]{8}").all():
                 raise ValueError(f"native {name} {column} must use YYYYMMDD")
-            frame[column] = pd.to_datetime(values, format="%Y%m%d").dt.strftime("%Y-%m-%d")
+            # Format each distinct session once instead of repeating it per security.
+            unique = values.drop_duplicates()
+            formatted = pd.to_datetime(unique, format="%Y%m%d").dt.strftime("%Y-%m-%d")
+            frame[column] = values.map(dict(zip(unique, formatted)))
         if name == "benchmark_returns":
             if frame["code"].isna().any() or not frame["code"].eq("SH000300").all():
                 raise ValueError("native benchmark_returns index code must be SH000300")

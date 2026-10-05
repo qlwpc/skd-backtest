@@ -54,7 +54,12 @@ class ResultWriter:
         if self._log is None:
             return
         for record in cache.log_records(after_seq=self._cursor):
-            line = json.dumps(asdict(record), ensure_ascii=False, allow_nan=False) + "\n"
+            # Logs contain JSON values validated at publication. Serializing
+            # these fields directly avoids recursively copying every cost quote.
+            line = json.dumps({"seq": record.seq, "date": record.date, "phase": record.phase,
+                               "component": record.component, "level": record.level,
+                               "message": record.message, "details": record.details},
+                              ensure_ascii=False, allow_nan=False) + "\n"
             if self._log.write(line) != len(line):
                 raise OSError("short write while flushing run log")
             self._log.flush()

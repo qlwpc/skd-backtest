@@ -1,6 +1,7 @@
 """Market-flow orchestration; all non-market handoffs use the runtime protocol."""
 
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from time import perf_counter
 from typing import Literal
@@ -42,6 +43,7 @@ class BacktestEngine:
         read_batch_months: int = 12, prefetch: bool = True, async_inference: bool = True,
         random_seed: int = 0,
         label_price_basis: Literal["adjusted_open", "raw_open"] = "adjusted_open",
+        precomputed_scores: pd.DataFrame | None = None,
     ):
         self.config = BacktestConfig(
             data_dir=Path(data_dir), start_date=start_date, end_date=end_date,
@@ -57,15 +59,35 @@ class BacktestEngine:
         self.optimizer_config = optimizer_config or OptimizerConfig()
         self.cost_config = cost_config or CostConfig()
         # Business state belongs to the cache; readers own per-run source resources.
-        if (inference is None) == (submission_dir is None):
-            raise ValueError("provide exactly one of inference or submission_dir")
+        if sum(value is not None for value in (inference, submission_dir, precomputed_scores)) != 1:
+            raise ValueError("provide exactly one of inference, submission_dir or precomputed_scores")
+        self._precomputed_scores = None
+        if precomputed_scores is not None:
+            if (not isinstance(precomputed_scores, pd.DataFrame)
+                    or not precomputed_scores.columns.is_unique
+                    or not {"date", "code", "score"}.issubset(precomputed_scores.columns)):
+                raise ValueError("precomputed_scores must be a DataFrame with date/code/score")
+            if precomputed_scores.date.isna().any():
+                raise ValueError("precomputed score dates must be nonmissing")
+            self._precomputed_scores = {
+                date: frame.loc[:, ["date", "code", "score"]].copy(deep=True)
+                for date, frame in precomputed_scores.groupby("date", sort=False)
+            }
+
+            def frozen_inference(*, as_of_date, data):
+                if as_of_date not in self._precomputed_scores:
+                    raise ValueError(f"precomputed_scores missing signal date {as_of_date}")
+                return self._precomputed_scores[as_of_date].copy(deep=True)
+
+            inference = frozen_inference
         self.submission_runner = (
             SubmissionRunner.from_submission(submission_dir, random_seed) if submission_dir is not None
             else SubmissionRunner(inference, random_seed)
         )
         self._submission_dir = submission_dir
         self._submission_has_run = False
-        self.data_provider = DataProvider(self.config)
+        self.data_provider = (DataProvider(replace(self.config, lookback=1), load_research=False, load_portfolio=True)
+                              if precomputed_scores is not None else DataProvider(self.config))
         self.reference_data = ReferenceDataProvider(self.config)
         self.label_provider = LabelProvider(self.config)
         self.prediction_evaluator = PredictionEvaluator()
@@ -119,7 +141,8 @@ class BacktestEngine:
             playback_started = perf_counter()
             with closing(inference_days(
                 self.data_provider.playback(), self.submission_runner,
-                rebalance_interval=self.config.rebalance_interval, enabled=self.config.async_inference,
+                rebalance_interval=self.config.rebalance_interval,
+                enabled=self.config.async_inference and self._precomputed_scores is None,
             )) as days:
                 for completed, (day, prediction) in enumerate(days, start=1):
                     date = day.date
@@ -153,7 +176,8 @@ class BacktestEngine:
                         call(Role.REFERENCE_DATA, self.reference_data.prepare_signal, date=date)
                         if prediction is None:
                             inference_started = perf_counter()
-                            call(Role.RUNNER, self.submission_runner.predict, as_of_date=date, data=day.research)
+                            call(Role.RUNNER, self.submission_runner.predict, as_of_date=date,
+                                 data={} if self._precomputed_scores is not None else day.research)
                             inference_seconds += perf_counter() - inference_started
                         else:
                             active_component = "runner.predict"
@@ -229,6 +253,7 @@ class BacktestEngine:
         self.metrics, self.tables, self.account = metrics, tables, account
         elapsed = perf_counter() - started
         self.performance = {
+            "score_source": "precomputed" if self._precomputed_scores is not None else "inference",
             "elapsed_seconds": elapsed, "playback_seconds": playback_seconds,
             "inference_seconds": inference_seconds, "inference_wait_seconds": inference_wait_seconds,
             "inference_calls": inference_calls,

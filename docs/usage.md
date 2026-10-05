@@ -145,7 +145,7 @@ python -m skd_backtest.evaluate --version
 
 用 `submission_dir="./submission"` 替代 `inference=model.predict` 即可由平台加载
 `submission/inference.py`，调用 `InferenceModel(model_dir)`；model/ 可以有多个固化模型文件。
-两个参数必须且只能传一个。每次评测只初始化一次实例，各信号日复用；
+模型路径的两个参数必须且只能传一个。每次评测只初始化一次实例，各信号日复用；
 同一个 Engine 再次 run 时，标准提交会重新加载模型，避免上次评测的内部状态影响结果。
 推理文件可用 `from .helper import ...` 加载提交目录内的辅助模块，不同队伍的相对导入互不混用。
 
@@ -154,6 +154,24 @@ python -m skd_backtest.evaluate --version
 可复现评测需固定 submission、数据、配置与数值环境。自行创建的 `default_rng()`、第三方随机生成器、
 外部熵及非确定性硬件算法由参赛者固定种子/配置；平台不自动改写参赛代码。
 直接传 callable 时，平台重置上述随机流，但其自有模型内部状态仍由调用者复位或重新创建。
+
+已完成逐日预测的研究可使用源码中的`precomputed_scores`路径（尚未发布到新发行包）：
+
+```python
+scores = pd.read_csv("predictions.csv", dtype={"date": str, "code": str})
+engine = BacktestEngine(
+    data_dir="./data", start_date="2019-01-02", end_date="2019-12-31",
+    precomputed_scores=scores, holding_period=1, rebalance_interval=1,
+)
+metrics = engine.run()
+```
+
+`precomputed_scores/inference/submission_dir`必须且只能提供一个。引擎复制冻结分数，按原信号日推进并经原Runner校验
+当日完整股票池、唯一编码和有限分数；缺少信号日立即报错，无下一执行日的末日仍不生成目标。
+冻结路径读取当日Barra及执行行情，省去三表研究窗口，行情预取仍生效，推理线程关闭。
+撮合、持仓、费用、历史参考价格、独立前向标签及审计输出保持同一实现。
+这条路径只评价分数，不验证生成分数的模型时间边界；完整标准提交验收仍须先逐日执行模型入口。
+`engine.performance.score_source`标记`precomputed`或`inference`，读取统计反映实际减少的数据量。
 
 评测平台批量回测推荐使用 `skd-backtest-evaluate`；一次调用处理一个标准提交，批量任务由平台调度。统一入口使用 JSON 或 TOML 配置：
 

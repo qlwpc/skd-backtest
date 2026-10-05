@@ -71,6 +71,18 @@ class DataFlowTest(unittest.TestCase):
         config.update(kwargs)
         return BacktestEngine(**config)
 
+    def test_frozen_scores_preserve_membership_and_batch_boundaries(self):
+        baseline = self.make_engine(friendly_output=False, async_inference=False, prefetch=False)
+        metrics = baseline.run()
+        scores = baseline.tables["predictions"][["date", "code", "score"]]
+        for prefetch in (False, True):
+            frozen = self.make_engine(inference=None, precomputed_scores=scores,
+                                     friendly_output=False, prefetch=prefetch)
+            self.assertEqual(metrics, frozen.run())
+            for name in baseline.tables:
+                assert_frame_equal(baseline.tables[name], frozen.tables[name], check_exact=True)
+            self.assertEqual(frozen.performance["data"]["delivered_rows"]["MarketData"], 0)
+
     def test_replay_matches_source_and_keeps_only_bounded_history(self):
         for prefetch in (False, True):
             engine = self.make_engine(prefetch=prefetch)
