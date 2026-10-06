@@ -55,6 +55,7 @@ class AdjustedLimitProvider:
     def close(self):
         self._month = None
         self._table = None
+        self._inputs = {}
         self.files_read = 0
 
     def apply(self, date: str, market: pd.DataFrame) -> pd.DataFrame:
@@ -73,13 +74,16 @@ class AdjustedLimitProvider:
                 frames.append(table)
             self._table = frames[0].merge(frames[1], on=["日期", "代码"], how="outer",
                                            validate="one_to_one").set_index(["日期", "代码"])
+            self._inputs = {}
+            for day, code, raw, flag in self._table.reset_index().itertuples(index=False, name=None):
+                self._inputs.setdefault(day, {})[code] = (raw, flag)
             self._month = month
             self.files_read += 2
         day = int(date.replace("-", ""))
-        keys = pd.MultiIndex.from_arrays([[day] * len(market), market["code"]], names=["日期", "代码"])
-        inputs = self._table.reindex(keys)
+        inputs = self._inputs.get(day, {})
         limits = []
-        for row, raw, is_st in zip(market.itertuples(index=False), inputs["open"], inputs["is_st"]):
+        for row in market.itertuples(index=False):
+            raw, is_st = inputs.get(row.code, (float("nan"), float("nan")))
             opening = _positive(row.adjusted_open)
             if row.is_missing or pd.isna(row.is_suspended) or row.is_suspended or opening is None:
                 limits.append((None, None))

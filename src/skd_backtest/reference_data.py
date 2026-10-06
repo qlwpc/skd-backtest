@@ -3,7 +3,9 @@
 from datetime import date as Date
 from math import fsum, isfinite
 from pathlib import Path
+from collections.abc import Mapping
 
+import numpy as np
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
 
@@ -24,6 +26,30 @@ _KEY_COLUMNS = {
 }
 
 
+class _DateSlices(Mapping):
+    """Index a validated, sorted table without constructing every daily frame."""
+    def __init__(self, frame):
+        self.frame = frame
+        values = frame["date"].to_numpy()
+        self.bounds = {}
+        self.materialized = {}
+        if len(values):
+            starts = np.r_[0, np.flatnonzero(values[1:] != values[:-1]) + 1, len(values)]
+            self.bounds = {values[start]: (start, stop) for start, stop in zip(starts[:-1], starts[1:])}
+
+    def __getitem__(self, date):
+        start, stop = self.bounds[date]
+        if date not in self.materialized:
+            self.materialized[date] = self.frame.iloc[start:stop]
+        return self.materialized[date]
+
+    def __iter__(self):
+        return iter(self.bounds)
+
+    def __len__(self):
+        return len(self.bounds)
+
+
 class ReferenceDataProvider:
     """Load each configured source once per run and expose exact-date slices."""
 
@@ -32,7 +58,7 @@ class ReferenceDataProvider:
         self._tables = {}
         self._slices = {}
 
-    def _load(self, name: str) -> dict[str, pd.DataFrame] | None:
+    def _load(self, name: str) -> Mapping[str, pd.DataFrame] | None:
         if name in self._slices:
             return self._slices[name]
 
@@ -49,13 +75,7 @@ class ReferenceDataProvider:
             totals = frame.groupby("date")["benchmark_weight"].transform("sum")
             frame["benchmark_weight"] = frame["benchmark_weight"] / totals
         frame = frame.sort_values(list(_KEY_COLUMNS[name]), kind="stable", ignore_index=True)
-        slices = {}
-        dates = frame["date"].tolist()
-        start = 0
-        for index in range(1, len(dates) + 1):
-            if index == len(dates) or dates[index] != dates[start]:
-                slices[dates[start]] = frame.iloc[start:index]
-                start = index
+        slices = _DateSlices(frame)
 
         self._tables[name] = frame
         self._slices[name] = slices
@@ -97,12 +117,13 @@ class ReferenceDataProvider:
         if not is_numeric_dtype(values.dtype) or is_bool_dtype(values.dtype):
             raise ValueError(f"{value_column} values must be numeric")
         try:
-            numeric = [float(value) for value in values]
+            numeric = (np.asarray([float(value) for value in values]) if values.dtype.kind == "c"
+                       else values.to_numpy(dtype=float, na_value=np.nan))
         except (TypeError, ValueError, OverflowError):
             raise ValueError(f"{value_column} values must be finite numbers") from None
-        if any(not isfinite(value) for value in numeric):
+        if not np.isfinite(numeric).all():
             raise ValueError(f"{value_column} values must be finite numbers")
-        if name == "benchmark_returns" and any(value < -1 for value in numeric):
+        if name == "benchmark_returns" and (numeric < -1).any():
             raise ValueError("benchmark returns must be at least -1")
         if name == "benchmark_weights":
             if "snapshot_date" in frame:
@@ -116,11 +137,11 @@ class ReferenceDataProvider:
                     raise ValueError("weight snapshot date must not be after its record date")
                 if frame.groupby("date").snapshot_date.nunique().gt(1).any():
                     raise ValueError("weights must use one snapshot date per record date")
-            if any(value < 0 for value in numeric):
+            if (numeric < 0).any():
                 raise ValueError("benchmark weights must be nonnegative")
-            for _, daily in frame.groupby("date", sort=False):
+            for indices in frame.groupby("date", sort=False).indices.values():
                 try:
-                    total = fsum(float(value) for value in daily.benchmark_weight)
+                    total = fsum(float(value) for value in numeric[indices])
                 except OverflowError:
                     total = float("inf")
                 if not isfinite(total) or total <= 0:

@@ -122,12 +122,18 @@ class BacktestEngine:
         failed = False
         inference_seconds, inference_wait_seconds = 0.0, 0.0
         inference_calls, market_rows = 0, 0
+        component_seconds = {}
 
         def call(role, method, **kwargs):
             nonlocal active_component
             active_component = f"{role}.{getattr(method, '__name__', type(method).__name__)}"
-            control.log(level="DEBUG", message=active_component)
-            return method(cache=views[role], **kwargs)
+            component = active_component
+            component_started = perf_counter()
+            try:
+                control.log(level="DEBUG", message=active_component)
+                return method(cache=views[role], **kwargs)
+            finally:
+                component_seconds[component] = component_seconds.get(component, 0.0) + perf_counter() - component_started
 
         try:
             console.status("准备回测数据…")
@@ -156,10 +162,13 @@ class BacktestEngine:
                     with closing(call(Role.BROKER, self.broker.execute, date=date, market=day.open_market)) as execution:
                         while True:
                             active_component = "broker.execute"
+                            execution_started = perf_counter()
                             try:
                                 request_id = next(execution)
                             except StopIteration:
                                 break
+                            finally:
+                                component_seconds["broker.execute"] = component_seconds.get("broker.execute", 0.0) + perf_counter() - execution_started
                             if type(request_id) is not int or not control.contains(Topic.COST_REQUEST, (date, request_id)):
                                 raise RuntimeError("Broker must publish the cost request before yielding its ID")
                             call(Role.COST_MODEL, self.cost_model.calculate, date=date, request_id=request_id)
@@ -257,11 +266,14 @@ class BacktestEngine:
             "elapsed_seconds": elapsed, "playback_seconds": playback_seconds,
             "inference_seconds": inference_seconds, "inference_wait_seconds": inference_wait_seconds,
             "inference_calls": inference_calls,
+            "component_seconds": component_seconds,
             "trading_days": len(self.trading_dates), "market_rows": market_rows,
             "days_per_second": len(self.trading_dates) / elapsed,
             "source_rows_per_second": sum(self.data_provider.stats["source_rows"].values()) / elapsed,
             "data": self.data_provider.stats.copy(),
         }
+        if hasattr(self.reference_data, "cache_stats"):
+            self.performance["reference_cache"] = self.reference_data.cache_stats.copy()
         console.results(self.metrics, trading_days=len(self.trading_dates), elapsed=elapsed,
                         output_dir=self.config.output_dir)
         return self.metrics
