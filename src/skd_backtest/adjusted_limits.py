@@ -75,24 +75,26 @@ class AdjustedLimitProvider:
             self._table = frames[0].merge(frames[1], on=["日期", "代码"], how="outer",
                                            validate="one_to_one").set_index(["日期", "代码"])
             self._inputs = {}
-            for day, code, raw, flag in self._table.reset_index().itertuples(index=False, name=None):
+            table = self._table.reset_index()
+            for day, code, raw, flag in zip(*(table[name].to_numpy() for name in ("日期", "代码", "open", "is_st"))):
                 self._inputs.setdefault(day, {})[code] = (raw, flag)
             self._month = month
             self.files_read += 2
         day = int(date.replace("-", ""))
         inputs = self._inputs.get(day, {})
         limits = []
-        for row in market.itertuples(index=False):
-            raw, is_st = inputs.get(row.code, (float("nan"), float("nan")))
-            opening = _positive(row.adjusted_open)
-            if row.is_missing or pd.isna(row.is_suspended) or row.is_suspended or opening is None:
+        columns = ("code", "adjusted_open", "is_missing", "is_suspended", "previous_close")
+        for code, adjusted_open, is_missing, is_suspended, previous_close in zip(*(market[name].to_numpy() for name in columns)):
+            raw, is_st = inputs.get(code, (float("nan"), float("nan")))
+            opening = _positive(adjusted_open)
+            if is_missing or pd.isna(is_suspended) or is_suspended or opening is None:
                 limits.append((None, None))
                 continue
             raw = _positive(raw)
             if raw is None:
-                raise ValueError(f"MarketDataRawOpen requires positive finite open: {date} {row.code}")
-            rate = _limit_rate(date, row.code, is_st)
-            previous = _positive(row.previous_close)
+                raise ValueError(f"MarketDataRawOpen requires positive finite open: {date} {code}")
+            rate = _limit_rate(date, code, is_st)
+            previous = _positive(previous_close)
             limits.append((None, None) if previous is None else _price_limits(opening, raw, previous, rate))
         result = market.copy()
         result["upper_limit"] = [upper for upper, _ in limits]

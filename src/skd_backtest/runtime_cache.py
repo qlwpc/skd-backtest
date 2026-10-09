@@ -92,7 +92,7 @@ def _combine(parts, columns):
 
 
 def _number(value, *, nonnegative=False):
-    if isinstance(value, bool) or not isinstance(value, Real) or not isfinite(value):
+    if (type(value) not in (float, int) and (isinstance(value, bool) or not isinstance(value, Real))) or not isfinite(value):
         raise ValueError("expected a finite number")
     if nonnegative and value < 0:
         raise ValueError("expected a nonnegative number")

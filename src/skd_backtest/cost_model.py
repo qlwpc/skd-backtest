@@ -178,8 +178,7 @@ class CostModel:
     @staticmethod
     def _nonnegative_rate(value: Real, name: str) -> float:
         if (
-            not isinstance(value, Real)
-            or isinstance(value, bool)
+            (type(value) not in (float, int) and (not isinstance(value, Real) or isinstance(value, bool)))
             or not isfinite(value)
             or value < 0
         ):

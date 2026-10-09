@@ -53,7 +53,10 @@ class ResultWriter:
     def flush_log(self, *, cache: CacheView) -> None:
         if self._log is None:
             return
-        for record in cache.log_records(after_seq=self._cursor):
+        records = cache.log_records(after_seq=self._cursor)
+        if not records:
+            return
+        for record in records:
             # Logs contain JSON values validated at publication. Serializing
             # these fields directly avoids recursively copying every cost quote.
             line = json.dumps({"seq": record.seq, "date": record.date, "phase": record.phase,
@@ -62,8 +65,8 @@ class ResultWriter:
                               ensure_ascii=False, allow_nan=False) + "\n"
             if self._log.write(line) != len(line):
                 raise OSError("short write while flushing run log")
-            self._log.flush()
-            self._cursor = record.seq
+        self._log.flush()
+        self._cursor = records[-1].seq
 
     def write(self, *, cache: CacheView) -> None:
         if not self._opened:

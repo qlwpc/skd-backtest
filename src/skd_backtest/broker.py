@@ -140,7 +140,7 @@ class Broker:
         target_weights = {}
         if plan.execution_date != date:
             raise ValueError("target plan is not scheduled for this execution date")
-        for row in plan.weights.itertuples(index=False, name=None):
+        for row in zip(*(plan.weights[name].to_numpy() for name in plan.weights)):
             row_signal, row_execution, code, _, _, raw_weight = row
             if row_signal != plan.signal_date or row_execution != date:
                 raise ValueError("target row dates do not match its plan")
@@ -156,18 +156,20 @@ class Broker:
         open_column = "raw_open" if account.price_mode == "raw_price" else "adjusted_open"
         required_market = ("code", open_column, "is_suspended", "is_missing", "upper_limit", "lower_limit")
         try:
-            market_columns = {name: market.columns.get_loc(name) for name in required_market}
+            for name in required_market:
+                market.columns.get_loc(name)
         except KeyError as exc:
             raise ValueError(f"open market is missing required field: {exc.args[0]}") from exc
+        market_columns = {name: index for index, name in enumerate(required_market)}
         market_rows = {}
-        for row in market.itertuples(index=False, name=None):
+        for row in zip(*(market[name].to_numpy() for name in required_market)):
             code = row[market_columns["code"]]
             if code in market_rows:
                 raise ValueError(f"open market contains duplicate code: {code}")
             market_rows[code] = row
 
         values_by_code = {}
-        for row in snapshot.values.itertuples(index=False, name=None):
+        for row in zip(*(snapshot.values[name].to_numpy() for name in snapshot.values)):
             code, price, price_date, market_value = row
             if code in values_by_code:
                 raise ValueError(f"open values contain duplicate code: {code}")
@@ -175,7 +177,7 @@ class Broker:
 
         columns = STATE_COLUMNS[account.price_mode]
         source_positions = {}
-        for row in account.positions.itertuples(index=False, name=None):
+        for row in zip(*(account.positions[name].to_numpy() for name in account.positions)):
             code = row[0]
             if code in source_positions:
                 raise ValueError(f"account positions contain duplicate code: {code}")
